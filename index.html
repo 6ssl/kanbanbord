@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f5f0">
+    <meta name="description" content="Een vrolijk kanbanbord om samen plannen, ideeën en taken overzichtelijk te maken.">
+    <title>Plak — jouw ideeën in beweging</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#" aria-label="Plak startpagina"><span class="brand-icon">p</span><span>plak<span class="brand-dot">.</span></span></a>
+        <div class="workspace-label">WERKRUIMTE</div>
+        <button class="workspace-switch"><span class="workspace-avatar">S</span><span><strong>Studio Spruit</strong><small>Persoonlijk bord</small></span><span class="chevron">⌄</span></button>
+        <div class="side-section-title">MENU</div>
+        <nav class="main-nav" aria-label="Hoofdnavigatie">
+          <button class="nav-item active" data-view="board"><span class="nav-icon">▦</span> Kanbanbord</button>
+          <button class="nav-item" data-view="mindmap"><span class="nav-icon">✳</span> Mindmap</button>
+          <button class="nav-item" data-view="notes"><span class="nav-icon">▤</span> Plaknotities</button>
+        </nav>
+        <div class="side-section-title boards-heading">JOUW BORDEN <button id="addBoard" title="Nieuw bord">+</button></div>
+        <button class="board-link selected"><span class="board-emoji">🌱</span> Project Spruit</button>
+        <button class="board-link"><span class="board-emoji">🎨</span> Ideeën & inspiratie</button>
+        <div class="sidebar-bottom">
+          <div class="upgrade-card"><span class="upgrade-spark">✦</span><strong>Grote ideeën?</strong><p>Maak samen ruimte voor nog meer.</p><button id="inviteButton">Nodig iemand uit <span>↗</span></button></div>
+          <button class="profile-button"><span class="profile-avatar">J</span><span><strong>Jij</strong><small>Gratis account</small></span><span class="chevron">···</span></button>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <header class="topbar">
+          <div class="breadcrumb"><span>Mijn werkruimte</span><span class="crumb-slash">/</span><strong>Project Spruit</strong></div>
+          <div class="top-actions">
+            <span class="saved-indicator"><i></i> Automatisch opgeslagen</span>
+            <button class="room-button" id="roomButton"><span>♧</span> <span id="roomButtonText">Deel bord</span></button>
+            <button class="icon-button" id="backendButton" aria-label="Multiplayer instellen" title="Multiplayer instellen">⚙</button>
+            <button class="icon-button" id="helpButton" aria-label="Help">?</button>
+          </div>
+        </header>
+
+        <section class="page-content">
+          <div class="board-heading">
+            <div>
+              <div class="eyebrow"><span class="eyebrow-leaf">✿</span> <span id="todayLabel"></span></div>
+              <div class="title-row"><h1>Project Spruit</h1><button class="tiny-edit" id="renameBoard" aria-label="Bordnaam wijzigen">✎</button><span class="private-tag">🔒 Privé</span></div>
+              <p class="board-subtitle">Kleine stapjes, grote dingen. Waar gaan we vandaag aan groeien?</p>
+            </div>
+            <div class="board-actions">
+              <div class="avatar-stack" id="memberAvatars" aria-label="Bordleden"><span class="avatar avatar-you" title="Jij">J</span><button id="inviteAvatar" class="avatar avatar-add" title="Nodig iemand uit">+</button></div>
+              <button class="share-button" id="shareButton">↗ <span>Delen</span></button>
+              <button class="more-button" id="moreButton" aria-label="Meer opties">···</button>
+            </div>
+          </div>
+
+          <div class="view-toolbar">
+            <div class="view-tabs">
+              <button class="view-tab active" data-view="board"><span>▦</span> Bord</button>
+              <button class="view-tab" data-view="mindmap"><span>✳</span> Mindmap</button>
+              <button class="view-tab" data-view="notes"><span>▤</span> Notities <span class="tab-count" id="noteCount">3</span></button>
+            </div>
+            <div class="toolbar-actions">
+              <label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="Zoek taken..." aria-label="Zoek taken"></label>
+              <button class="filter-button" id="filterButton">☷ <span>Filter</span></button>
+              <button class="add-task-button" id="addTaskButton"><span>+</span> Nieuwe taak</button>
+            </div>
+          </div>
+
+          <section class="board-view active" id="boardView" aria-label="Kanbanbord">
+            <div class="columns" id="columns"></div>
+            <button class="add-column" id="addColumn"><span>+</span> Kolom toevoegen</button>
+          </section>
+
+          <section class="mindmap-view" id="mindmapView" aria-label="Mindmap">
+            <div class="canvas-toolbar"><div><strong>Ideeën laten groeien</strong><span>Sleep de kaartjes om je mindmap te organiseren.</span></div><button id="addMindNode">＋ Idee toevoegen</button></div>
+            <div class="mindmap-canvas" id="mindmapCanvas">
+              <svg class="mindmap-lines" id="mindmapLines" aria-hidden="true"></svg>
+              <div class="mind-node central-node" data-node="center">🌱<strong>Project Spruit</strong><small>Ons grote idee</small></div>
+              <div class="mind-node mint-node" data-node="research">🔎<strong>Onderzoek</strong><small>Wat is er nodig?</small></div>
+              <div class="mind-node peach-node" data-node="design">🎨<strong>Ontwerp</strong><small>Hoe ziet het eruit?</small></div>
+              <div class="mind-node lilac-node" data-node="launch">🚀<strong>Lancering</strong><small>De wereld in!</small></div>
+              <div class="mind-node yellow-node" data-node="people">💛<strong>Voor wie?</strong><small>Onze community</small></div>
+            </div>
+          </section>
+
+          <section class="notes-view" id="notesView" aria-label="Plaknotities"><div class="notes-header"><div><h2>Losse gedachten</h2><p>Vang een idee voordat het weer wegfladdert.</p></div><button class="add-note-button" id="addNoteButton">＋ Nieuwe notitie</button></div><div class="notes-grid" id="notesGrid"></div></section>
+
+          <footer class="board-footer"><div class="progress-label"><span class="progress-flower">✿</span><span id="progressText">Je bent lekker bezig!</span></div><div class="progress-track"><div class="progress-fill" id="progressFill"></div></div><span class="progress-count" id="progressCount">0 / 0 taken klaar</span></footer>
+        </section>
+      </main>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <canvas id="confettiCanvas" aria-hidden="true"></canvas>
+    <div id="remoteCursors" aria-hidden="true"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
