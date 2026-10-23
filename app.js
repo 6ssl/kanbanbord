@@ -35,6 +35,7 @@ let activeRoomId = null;
 let roomSaveTimer = null;
 let cursorTimer = null;
 let lastCursorSent = 0;
+let cursorPublishErrorShown = false;
 const profile = loadProfile();
 const clientId = crypto.randomUUID();
 
@@ -75,7 +76,7 @@ async function connectSupabase() {
       const { error } = await supabaseClient.auth.signInAnonymously();
       if (error) throw error;
     }
-    updateConnectionStatus("ready");
+    updateConnectionStatus("connected");
     return true;
   } catch (error) {
     console.error("Verbinding met Supabase instellen mislukte:", error);
@@ -90,7 +91,14 @@ async function connectSupabase() {
 function updateConnectionStatus(status) {
   const indicator = document.querySelector(".saved-indicator");
   indicator.classList.toggle("connection-error", status === "offline");
-  indicator.innerHTML = status === "ready" ? "<i></i> Multiplayer klaar" : status === "offline" ? "<i></i> Multiplayer niet verbonden" : "<i></i> Automatisch opgeslagen";
+  const labels = {
+    local: "Automatisch opgeslagen",
+    connected: "Supabase verbonden · niet in een room",
+    connecting: "Realtime-room verbinden…",
+    ready: "Multiplayer actief",
+    offline: "Realtime niet verbonden"
+  };
+  indicator.innerHTML = `<i></i> ${labels[status] || labels.local}`;
 }
 
 function loadState() {
@@ -151,6 +159,7 @@ async function leaveRoom() {
   document.querySelector("#memberAvatars").innerHTML = '<span class="avatar avatar-you" title="Jij">J</span><button id="inviteAvatar" class="avatar avatar-add" title="Nodig iemand uit">+</button>';
   document.querySelector("#inviteAvatar").addEventListener("click", openRoomDialog);
   document.querySelector("#remoteCursors").replaceChildren();
+  updateConnectionStatus(supabaseClient ? "connected" : "local");
 }
 async function joinRoom(roomId, initialState) {
   if (!supabaseClient && !await connectSupabase()) {
@@ -186,24 +195,67 @@ async function joinRoom(roomId, initialState) {
   }
   activeRoomId = roomId;
   document.querySelector("#roomButtonText").textContent = roomId;
+  updateConnectionStatus("connecting");
   roomChannel = supabaseClient.channel(`room:${roomId}`, { config: { presence: { key: clientId } } });
-  roomChannel
+  const channel = roomChannel;
+  const realtimeReady = new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      fail("TIMED_OUT");
+    }, 12000);
+    const fail = status => {
+      updateConnectionStatus("offline");
+      showToast(status === "PRESENCE_ERROR"
+        ? "Deelnemers en cursors publiceren lukte niet. Controleer de Supabase Realtime-toegangsregels."
+        : `Realtime verbinden lukte niet (${status}). Controleer of Realtime aanstaat en probeer opnieuw.`);
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject(new Error(`Room realtime connection failed: ${status}`));
+      }
+    };
+
+    channel
     .on("postgres_changes", { event: "*", schema: "public", table: "rooms", filter: `room_id=eq.${roomId}` }, payload => {
       if (payload.new?.board_state && payload.new.updated_by !== clientId) acceptRemoteState(payload.new.board_state);
     })
     .on("presence", { event: "sync" }, renderRoomMembers)
     .on("presence", { event: "join" }, renderRoomMembers)
     .on("presence", { event: "leave" }, renderRoomMembers)
+    .on("broadcast", { event: "cursor" }, ({ payload }) => renderRemoteCursor(payload))
     .subscribe(async status => {
       if (status === "SUBSCRIBED") {
-        updateConnectionStatus("ready");
-        const { error } = await roomChannel.track({ id: clientId, name: profile.name, color: safeColor(profile.color), x: null, y: null });
-        if (error) console.error("Room-aanwezigheid publiceren mislukte:", error);
-      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        try {
+          const { error } = await channel.track({ id: clientId, name: profile.name, color: safeColor(profile.color), x: null, y: null });
+          if (error) {
+            console.error("Room-aanwezigheid publiceren mislukte:", error);
+            fail("PRESENCE_ERROR");
+            return;
+          }
+          updateConnectionStatus("ready");
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeout);
+            resolve();
+          }
+        } catch (error) {
+          console.error("Room-aanwezigheid publiceren mislukte:", error);
+          fail("PRESENCE_ERROR");
+        }
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
         console.error("Room realtime verbinding status:", status);
-        showToast("De realtime verbinding met de room is verbroken.");
+        fail(status);
       }
     });
+  });
+  try {
+    await realtimeReady;
+  } catch (error) {
+    console.error("Room realtime verbinden mislukte:", error);
+    await leaveRoom();
+    updateConnectionStatus("offline");
+    return false;
+  }
   showToast(`Je doet mee in room ${roomId}! 🎉`);
   return true;
 }
@@ -214,16 +266,27 @@ function renderRoomMembers() {
   stack.innerHTML = `<span class="avatar avatar-you" style="background:${safeColor(profile.color)};color:white" title="${escapeHtml(profile.name)}">${escapeHtml(profile.name.slice(0, 1).toUpperCase())}</span>${members.slice(0, 5).map(member => `<span class="avatar" style="background:${safeColor(member.color)};color:white" title="${escapeHtml(member.name)}">${escapeHtml(String(member.name || "?").slice(0, 1).toUpperCase())}</span>`).join("")}<button id="inviteAvatar" class="avatar avatar-add" title="Nodig iemand uit">+</button>`;
   document.querySelector("#inviteAvatar").addEventListener("click", openRoomDialog);
   const cursors = document.querySelector("#remoteCursors");
-  cursors.replaceChildren();
-  members.filter(member => Number.isFinite(member.x) && Number.isFinite(member.y)).forEach(member => {
-    const cursor = document.createElement("div");
-    cursor.className = "remote-cursor";
-    cursor.style.left = `${member.x * window.innerWidth}px`;
-    cursor.style.top = `${member.y * window.innerHeight}px`;
-    cursor.style.setProperty("--cursor-color", safeColor(member.color));
-    cursor.innerHTML = `<svg viewBox="0 0 18 22" aria-hidden="true"><path d="M2 2v16l4.5-4.5L10 21l3-1.5-3.8-7H16L2 2Z" fill="currentColor" stroke="white" stroke-width="1.4" stroke-linejoin="round"/></svg><span>${escapeHtml(member.name || "Gast")}</span>`;
-    cursors.append(cursor);
+  const memberIds = new Set(members.map(member => String(member.id)));
+  cursors.querySelectorAll(".remote-cursor").forEach(cursor => {
+    if (!memberIds.has(cursor.dataset.memberId)) cursor.remove();
   });
+}
+function renderRemoteCursor(member) {
+  const memberId = String(member?.id || "");
+  if (!memberId || memberId === clientId || !Number.isFinite(member.x) || !Number.isFinite(member.y)) return;
+  const cursors = document.querySelector("#remoteCursors");
+  let cursor = Array.from(cursors.querySelectorAll(".remote-cursor")).find(item => item.dataset.memberId === memberId);
+  if (!cursor) {
+    cursor = document.createElement("div");
+    cursor.className = "remote-cursor";
+    cursor.dataset.memberId = memberId;
+    cursor.innerHTML = '<svg viewBox="0 0 18 22" aria-hidden="true"><path d="M2 2v16l4.5-4.5L10 21l3-1.5-3.8-7H16L2 2Z" fill="currentColor" stroke="white" stroke-width="1.4" stroke-linejoin="round"/></svg><span></span>';
+    cursors.append(cursor);
+  }
+  cursor.style.left = `${Math.max(0, Math.min(1, member.x)) * window.innerWidth}px`;
+  cursor.style.top = `${Math.max(0, Math.min(1, member.y)) * window.innerHeight}px`;
+  cursor.style.setProperty("--cursor-color", safeColor(member.color));
+  cursor.querySelector("span").textContent = String(member.name || "Gast");
 }
 function publishCursor(event) {
   if (!roomChannel || !activeRoomId) return;
@@ -233,7 +296,22 @@ function publishCursor(event) {
   clearTimeout(cursorTimer);
   cursorTimer = setTimeout(() => {
     if (!roomChannel || !activeRoomId) return;
-    roomChannel.track({ id: clientId, name: profile.name, color: safeColor(profile.color), x: event.clientX / window.innerWidth, y: event.clientY / window.innerHeight });
+    const payload = {
+      id: clientId,
+      name: profile.name,
+      color: safeColor(profile.color),
+      x: event.clientX / window.innerWidth,
+      y: event.clientY / window.innerHeight
+    };
+    roomChannel.send({ type: "broadcast", event: "cursor", payload }).then(status => {
+      if (status !== "ok") throw new Error(`Cursor broadcast failed: ${status}`);
+    }).catch(error => {
+      console.error("Cursorpositie publiceren mislukte:", error);
+      if (!cursorPublishErrorShown) {
+        cursorPublishErrorShown = true;
+        showToast("Je cursor kon niet met de room worden gedeeld. Controleer de Supabase Realtime-instellingen.");
+      }
+    });
   }, 60);
 }
 function escapeHtml(value) {
