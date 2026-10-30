@@ -125,6 +125,13 @@ h1 { font: 800 29px "Plus Jakarta Sans", sans-serif; letter-spacing: -1.1px; mar
 .task-priority { margin-left: auto; color: #92938b; font-size: 8px; }
 .task-priority.priority-high { color: #bd6b55; font-weight: 700; }
 .task-priority.priority-low { color: #7d9473; }
+.task-claim { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 8px 0 0 20px; }
+.claim-person { display: inline-flex; align-items: center; gap: 5px; color: #82867c; font-size: 8px; }
+.claim-person i { display: grid; width: 17px; height: 17px; place-items: center; border-radius: 50%; background: var(--claim-color); color: white; font-size: 8px; font-style: normal; font-weight: 700; }
+.claim-button { border: 1px solid #e8e8df; border-radius: 5px; padding: 4px 6px; background: transparent; color: #60856b; font-size: 8px; }
+.claim-button:hover:not(:disabled) { background: #edf3e7; }
+.claim-button:disabled { border-color: transparent; color: #898b82; cursor: default; }
+.claim-button.claimed-by-me { color: #54866c; }
 .task-subtasks { display: grid; gap: 5px; margin: 10px 0 0 20px; }
 .subtask-heading { display: flex; justify-content: space-between; color: #92938b; font-size: 8px; font-weight: 700; }
 .subtask-heading span { font-weight: 500; }
@@ -235,10 +242,14 @@ h1 { font: 800 29px "Plus Jakarta Sans", sans-serif; letter-spacing: -1.1px; mar
 :root[data-theme="dark"] .task-description,
 :root[data-theme="dark"] .task-due,
 :root[data-theme="dark"] .task-priority,
+:root[data-theme="dark"] .claim-person,
 :root[data-theme="dark"] .canvas-toolbar span,
 :root[data-theme="dark"] .notes-header p,
 :root[data-theme="dark"] .saved-indicator { color: #a4a79d; }
 :root[data-theme="dark"] .kanban-column { background: #292d28; }
+:root[data-theme="dark"] .claim-button { border-color: #41463f; color: #a4c9ad; }
+:root[data-theme="dark"] .claim-button:hover:not(:disabled) { background: #354236; }
+:root[data-theme="dark"] .claim-button:disabled { border-color: transparent; color: #a4a79d; }
 :root[data-theme="dark"] .column-count,
 :root[data-theme="dark"] .private-tag { background: #393d37; color: #c2c5bb; }
 :root[data-theme="dark"] .view-toolbar,

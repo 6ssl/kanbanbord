@@ -4,6 +4,8 @@ Een statische Nederlandstalige kanban-app met een interactieve mindmap en plakno
 
 Taken kunnen subtaken, prioriteiten en deadlines bevatten. Bewerk een taak via het potloodje op de kaart; vink subtaken direct af en filter het bord op open, afgeronde of te late taken.
 
+Claim een open taak om te laten zien dat je eraan werkt. Andere bordleden zien wie de taak heeft geclaimd; je kunt je eigen claim ook weer vrijgeven. Claims synchroniseren mee in een gedeelde room.
+
 De bordnaam is aanpasbaar en wordt lokaal of in de gedeelde room opgeslagen. Met de maan/zon-knop wissel je tussen licht en donker; je voorkeur blijft bewaard in deze browser.
 
 ## Lokaal bekijken

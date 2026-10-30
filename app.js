@@ -395,11 +395,17 @@ function renderTask(task) {
   const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
   const completedSubtasks = subtasks.filter(subtask => subtask.completed).length;
   const priority = task.priority || "normal";
+  const assignee = task.assignee && typeof task.assignee === "object" ? task.assignee : null;
+  const claimedByMe = assignee?.id === profile.id;
+  const claimLabel = claimedByMe ? "Jij bent bezig · vrijgeven" : assignee ? `Bezig: ${assignee.name || "Gast"}` : "＋ Claim taak";
   return `<article class="task-card${task.completed ? " completed" : ""}" draggable="true" data-task="${escapeHtml(task.id)}">
     <div class="task-topline"><input class="task-check" type="checkbox" aria-label="Taak afvinken: ${escapeHtml(task.title)}" ${task.completed ? "checked" : ""}>
     <span class="task-title">${escapeHtml(task.title)}</span><button class="task-edit" aria-label="Taak bewerken en subtaken beheren" title="Bewerken">✎</button><button class="task-delete" aria-label="Taak verwijderen">×</button></div>
     ${task.description ? `<p class="task-description">${escapeHtml(task.description)}</p>` : ""}
     <div class="task-meta"><span class="task-tag tag-${escapeHtml(task.tone || "mint")}">${escapeHtml(task.tag || "Taak")}</span><span class="task-priority priority-${escapeHtml(priority)}">${priority === "high" ? "Hoog" : priority === "low" ? "Laag" : "Normaal"}</span>${task.due ? `<span class="task-due${isTaskOverdue(task) || task.due === "Vandaag" ? " urgent" : ""}">${escapeHtml(formatDueDate(task.due))}</span>` : ""}</div>
+    ${task.completed
+      ? ""
+      : `<div class="task-claim${assignee ? " is-claimed" : ""}">${assignee ? `<span class="claim-person"><i style="--claim-color:${safeColor(assignee.color)}">${escapeHtml(String(assignee.name || "Gast").slice(0, 1).toUpperCase())}</i>${escapeHtml(String(assignee.name || "Gast"))} is bezig</span>` : ""}<button class="claim-button${claimedByMe ? " claimed-by-me" : ""}" aria-label="${escapeHtml(claimLabel)}" ${assignee && !claimedByMe ? "disabled" : ""}>${escapeHtml(claimLabel)}</button></div>`}
     ${subtasks.length ? `<div class="task-subtasks"><div class="subtask-heading">Subtaken <span>${completedSubtasks}/${subtasks.length}</span></div>${subtasks.map((subtask, index) => `<label class="subtask-row"><input type="checkbox" data-subtask-index="${index}" ${subtask.completed ? "checked" : ""}><span class="${subtask.completed ? "subtask-completed" : ""}">${escapeHtml(subtask.title)}</span></label>`).join("")}</div>` : `<button class="add-subtask" data-edit-task>＋ Subtaak toevoegen</button>`}
     </article>`;
 }
@@ -418,8 +424,22 @@ function attachColumnEvents() {
       const task = state.tasks.find(item => item.id === card.dataset.task);
       task.completed = event.target.checked;
       if (task.completed && Array.isArray(task.subtasks)) task.subtasks.forEach(subtask => { subtask.completed = true; });
+      if (task.completed) task.assignee = null;
       saveState(); renderBoard();
       if (task.completed) launchConfetti();
+    });
+    card.querySelector(".claim-button")?.addEventListener("click", event => {
+      const task = state.tasks.find(item => item.id === card.dataset.task);
+      if (!task || task.completed) return;
+      if (task.assignee?.id === profile.id) {
+        task.assignee = null;
+      } else if (!task.assignee) {
+        task.assignee = { id: profile.id, name: profile.name, color: safeColor(profile.color) };
+      } else {
+        return;
+      }
+      saveState();
+      renderBoard();
     });
     card.querySelector(".task-edit").addEventListener("click", () => {
       const task = state.tasks.find(item => item.id === card.dataset.task);
@@ -434,6 +454,7 @@ function attachColumnEvents() {
       const index = Number(event.currentTarget.dataset.subtaskIndex);
       task.subtasks[index].completed = event.currentTarget.checked;
       if (task.subtasks.length) task.completed = task.subtasks.every(subtask => subtask.completed);
+      if (task.completed) task.assignee = null;
       saveState(); renderBoard();
       if (task.completed) launchConfetti();
     }));
