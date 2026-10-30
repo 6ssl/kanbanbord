@@ -1,11 +1,13 @@
 const STORAGE_KEY = "plak-kanban-v1";
 const BACKEND_KEY = "plak-supabase-config-v1";
 const PROFILE_KEY = "plak-profile-v1";
+const THEME_KEY = "plak-theme-v1";
 const DEFAULT_SUPABASE_CONFIG = {
   url: "https://eacnppeupstfssnjwqbh.supabase.co",
   key: "sb_publishable_LI-Qu9kPvqI1dT7bUFehcw_ZhLBPQ6I"
 };
 const initialState = {
+  boardTitle: "Project Spruit",
   columns: [
     { id: "ideas", name: "Ideeën", color: "#dfa768" },
     { id: "todo", name: "Op de planning", color: "#8299b2" },
@@ -35,6 +37,7 @@ let activeRoomId = null;
 let roomSaveTimer = null;
 let cursorTimer = null;
 let lastCursorSent = 0;
+let cursorPublishErrorShown = false;
 const profile = loadProfile();
 const clientId = crypto.randomUUID();
 
@@ -50,6 +53,30 @@ function loadProfile() {
     console.error("Profiel kon niet worden geladen:", error);
     return { id: crypto.randomUUID(), name: "Gast", color: "#608eb0" };
   }
+}
+function loadTheme() {
+  try { return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; }
+  catch (error) {
+    console.error("Thema-instelling kon niet worden geladen:", error);
+    return "light";
+  }
+}
+function applyTheme(theme) {
+  const isDark = theme === "dark";
+  document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  const button = document.querySelector("#themeToggle");
+  button.textContent = isDark ? "☀" : "☾";
+  button.setAttribute("aria-pressed", String(isDark));
+  button.setAttribute("aria-label", isDark ? "Schakel naar lichte modus" : "Schakel naar donkere modus");
+  button.title = isDark ? "Schakel naar lichte modus" : "Schakel naar donkere modus";
+  document.querySelector('meta[name="theme-color"]').content = isDark ? "#20241f" : "#f7f5f0";
+}
+function renderBoardTitle() {
+  const title = state.boardTitle || initialState.boardTitle;
+  document.querySelector(".title-row h1").textContent = title;
+  document.querySelectorAll("[data-board-title]").forEach(element => { element.textContent = title; });
+  document.querySelector(".central-node strong").textContent = title;
+  document.title = `${title} — Plak`;
 }
 function saveProfile() {
   try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)); }
@@ -75,7 +102,7 @@ async function connectSupabase() {
       const { error } = await supabaseClient.auth.signInAnonymously();
       if (error) throw error;
     }
-    updateConnectionStatus("ready");
+    updateConnectionStatus("connected");
     return true;
   } catch (error) {
     console.error("Verbinding met Supabase instellen mislukte:", error);
@@ -90,7 +117,14 @@ async function connectSupabase() {
 function updateConnectionStatus(status) {
   const indicator = document.querySelector(".saved-indicator");
   indicator.classList.toggle("connection-error", status === "offline");
-  indicator.innerHTML = status === "ready" ? "<i></i> Multiplayer klaar" : status === "offline" ? "<i></i> Multiplayer niet verbonden" : "<i></i> Automatisch opgeslagen";
+  const labels = {
+    local: "Automatisch opgeslagen",
+    connected: "Supabase verbonden · niet in een room",
+    connecting: "Realtime-room verbinden…",
+    ready: "Multiplayer actief",
+    offline: "Realtime niet verbonden"
+  };
+  indicator.innerHTML = `<i></i> ${labels[status] || labels.local}`;
 }
 
 function loadState() {
@@ -99,7 +133,7 @@ function loadState() {
     if (!saved) return structuredClone(initialState);
     const parsed = JSON.parse(saved);
     if (!Array.isArray(parsed.columns) || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.notes)) throw new Error("Ongeldige bordgegevens.");
-    return parsed;
+    return { ...parsed, boardTitle: typeof parsed.boardTitle === "string" && parsed.boardTitle.trim() ? parsed.boardTitle : initialState.boardTitle };
   } catch (error) {
     console.error("Bordgegevens konden niet worden geladen:", error);
     return structuredClone(initialState);
@@ -133,8 +167,10 @@ function acceptRemoteState(remoteState) {
     return;
   }
   state = remoteState;
+  if (typeof state.boardTitle !== "string" || !state.boardTitle.trim()) state.boardTitle = initialState.boardTitle;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch (error) { console.error("Gedeeld bord lokaal bewaren mislukte:", error); }
+  renderBoardTitle();
   renderBoard();
   renderNotes();
 }
@@ -151,6 +187,7 @@ async function leaveRoom() {
   document.querySelector("#memberAvatars").innerHTML = '<span class="avatar avatar-you" title="Jij">J</span><button id="inviteAvatar" class="avatar avatar-add" title="Nodig iemand uit">+</button>';
   document.querySelector("#inviteAvatar").addEventListener("click", openRoomDialog);
   document.querySelector("#remoteCursors").replaceChildren();
+  updateConnectionStatus(supabaseClient ? "connected" : "local");
 }
 async function joinRoom(roomId, initialState) {
   if (!supabaseClient && !await connectSupabase()) {
@@ -186,24 +223,67 @@ async function joinRoom(roomId, initialState) {
   }
   activeRoomId = roomId;
   document.querySelector("#roomButtonText").textContent = roomId;
+  updateConnectionStatus("connecting");
   roomChannel = supabaseClient.channel(`room:${roomId}`, { config: { presence: { key: clientId } } });
-  roomChannel
+  const channel = roomChannel;
+  const realtimeReady = new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      fail("TIMED_OUT");
+    }, 12000);
+    const fail = status => {
+      updateConnectionStatus("offline");
+      showToast(status === "PRESENCE_ERROR"
+        ? "Deelnemers en cursors publiceren lukte niet. Controleer de Supabase Realtime-toegangsregels."
+        : `Realtime verbinden lukte niet (${status}). Controleer of Realtime aanstaat en probeer opnieuw.`);
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject(new Error(`Room realtime connection failed: ${status}`));
+      }
+    };
+
+    channel
     .on("postgres_changes", { event: "*", schema: "public", table: "rooms", filter: `room_id=eq.${roomId}` }, payload => {
       if (payload.new?.board_state && payload.new.updated_by !== clientId) acceptRemoteState(payload.new.board_state);
     })
     .on("presence", { event: "sync" }, renderRoomMembers)
     .on("presence", { event: "join" }, renderRoomMembers)
     .on("presence", { event: "leave" }, renderRoomMembers)
+    .on("broadcast", { event: "cursor" }, ({ payload }) => renderRemoteCursor(payload))
     .subscribe(async status => {
       if (status === "SUBSCRIBED") {
-        updateConnectionStatus("ready");
-        const { error } = await roomChannel.track({ id: clientId, name: profile.name, color: safeColor(profile.color), x: null, y: null });
-        if (error) console.error("Room-aanwezigheid publiceren mislukte:", error);
-      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        try {
+          const { error } = await channel.track({ id: clientId, name: profile.name, color: safeColor(profile.color), x: null, y: null });
+          if (error) {
+            console.error("Room-aanwezigheid publiceren mislukte:", error);
+            fail("PRESENCE_ERROR");
+            return;
+          }
+          updateConnectionStatus("ready");
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeout);
+            resolve();
+          }
+        } catch (error) {
+          console.error("Room-aanwezigheid publiceren mislukte:", error);
+          fail("PRESENCE_ERROR");
+        }
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
         console.error("Room realtime verbinding status:", status);
-        showToast("De realtime verbinding met de room is verbroken.");
+        fail(status);
       }
     });
+  });
+  try {
+    await realtimeReady;
+  } catch (error) {
+    console.error("Room realtime verbinden mislukte:", error);
+    await leaveRoom();
+    updateConnectionStatus("offline");
+    return false;
+  }
   showToast(`Je doet mee in room ${roomId}! 🎉`);
   return true;
 }
@@ -214,16 +294,27 @@ function renderRoomMembers() {
   stack.innerHTML = `<span class="avatar avatar-you" style="background:${safeColor(profile.color)};color:white" title="${escapeHtml(profile.name)}">${escapeHtml(profile.name.slice(0, 1).toUpperCase())}</span>${members.slice(0, 5).map(member => `<span class="avatar" style="background:${safeColor(member.color)};color:white" title="${escapeHtml(member.name)}">${escapeHtml(String(member.name || "?").slice(0, 1).toUpperCase())}</span>`).join("")}<button id="inviteAvatar" class="avatar avatar-add" title="Nodig iemand uit">+</button>`;
   document.querySelector("#inviteAvatar").addEventListener("click", openRoomDialog);
   const cursors = document.querySelector("#remoteCursors");
-  cursors.replaceChildren();
-  members.filter(member => Number.isFinite(member.x) && Number.isFinite(member.y)).forEach(member => {
-    const cursor = document.createElement("div");
-    cursor.className = "remote-cursor";
-    cursor.style.left = `${member.x * window.innerWidth}px`;
-    cursor.style.top = `${member.y * window.innerHeight}px`;
-    cursor.style.setProperty("--cursor-color", safeColor(member.color));
-    cursor.innerHTML = `<svg viewBox="0 0 18 22" aria-hidden="true"><path d="M2 2v16l4.5-4.5L10 21l3-1.5-3.8-7H16L2 2Z" fill="currentColor" stroke="white" stroke-width="1.4" stroke-linejoin="round"/></svg><span>${escapeHtml(member.name || "Gast")}</span>`;
-    cursors.append(cursor);
+  const memberIds = new Set(members.map(member => String(member.id)));
+  cursors.querySelectorAll(".remote-cursor").forEach(cursor => {
+    if (!memberIds.has(cursor.dataset.memberId)) cursor.remove();
   });
+}
+function renderRemoteCursor(member) {
+  const memberId = String(member?.id || "");
+  if (!memberId || memberId === clientId || !Number.isFinite(member.x) || !Number.isFinite(member.y)) return;
+  const cursors = document.querySelector("#remoteCursors");
+  let cursor = Array.from(cursors.querySelectorAll(".remote-cursor")).find(item => item.dataset.memberId === memberId);
+  if (!cursor) {
+    cursor = document.createElement("div");
+    cursor.className = "remote-cursor";
+    cursor.dataset.memberId = memberId;
+    cursor.innerHTML = '<svg viewBox="0 0 18 22" aria-hidden="true"><path d="M2 2v16l4.5-4.5L10 21l3-1.5-3.8-7H16L2 2Z" fill="currentColor" stroke="white" stroke-width="1.4" stroke-linejoin="round"/></svg><span></span>';
+    cursors.append(cursor);
+  }
+  cursor.style.left = `${Math.max(0, Math.min(1, member.x)) * window.innerWidth}px`;
+  cursor.style.top = `${Math.max(0, Math.min(1, member.y)) * window.innerHeight}px`;
+  cursor.style.setProperty("--cursor-color", safeColor(member.color));
+  cursor.querySelector("span").textContent = String(member.name || "Gast");
 }
 function publishCursor(event) {
   if (!roomChannel || !activeRoomId) return;
@@ -233,7 +324,22 @@ function publishCursor(event) {
   clearTimeout(cursorTimer);
   cursorTimer = setTimeout(() => {
     if (!roomChannel || !activeRoomId) return;
-    roomChannel.track({ id: clientId, name: profile.name, color: safeColor(profile.color), x: event.clientX / window.innerWidth, y: event.clientY / window.innerHeight });
+    const payload = {
+      id: clientId,
+      name: profile.name,
+      color: safeColor(profile.color),
+      x: event.clientX / window.innerWidth,
+      y: event.clientY / window.innerHeight
+    };
+    roomChannel.send({ type: "broadcast", event: "cursor", payload }).then(status => {
+      if (status !== "ok") throw new Error(`Cursor broadcast failed: ${status}`);
+    }).catch(error => {
+      console.error("Cursorpositie publiceren mislukte:", error);
+      if (!cursorPublishErrorShown) {
+        cursorPublishErrorShown = true;
+        showToast("Je cursor kon niet met de room worden gedeeld. Controleer de Supabase Realtime-instellingen.");
+      }
+    });
   }, 60);
 }
 function escapeHtml(value) {
@@ -248,9 +354,19 @@ function showToast(message) {
 }
 function renderBoard() {
   const query = document.querySelector("#searchInput").value.trim().toLowerCase();
+  const filter = document.querySelector("#filterSelect").value;
   const columns = document.querySelector("#columns");
   columns.innerHTML = state.columns.map(column => {
-    const tasks = state.tasks.filter(task => task.column === column.id && (!query || `${task.title} ${task.description} ${task.tag}`.toLowerCase().includes(query)));
+    const tasks = state.tasks.filter(task => {
+      const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+      const matchesQuery = !query || `${task.title} ${task.description} ${task.tag} ${subtasks.map(subtask => subtask.title).join(" ")}`.toLowerCase().includes(query);
+      const matchesFilter = filter === "all"
+        || (filter === "open" && !task.completed)
+        || (filter === "completed" && task.completed)
+        || (filter === "high" && task.priority === "high")
+        || (filter === "overdue" && isTaskOverdue(task));
+      return task.column === column.id && matchesQuery && matchesFilter;
+    });
     return `<section class="kanban-column" data-column="${escapeHtml(column.id)}">
       <div class="column-header"><i class="column-dot" style="background:${escapeHtml(column.color)}"></i>
       <input class="column-title" aria-label="Kolomnaam" value="${escapeHtml(column.name)}" data-column-name="${escapeHtml(column.id)}">
@@ -262,12 +378,30 @@ function renderBoard() {
   renderProgress();
   attachColumnEvents();
 }
+function isTaskOverdue(task) {
+  if (task.completed || !/^\d{4}-\d{2}-\d{2}$/.test(task.due || "")) return false;
+  const [year, month, day] = task.due.split("-").map(Number);
+  const dueDate = new Date(year, month - 1, day);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return dueDate.getFullYear() === year && dueDate.getMonth() === month - 1 && dueDate.getDate() === day && dueDate < today;
+}
+function formatDueDate(due) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due || "")) return due;
+  const date = new Date(`${due}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? due : new Intl.DateTimeFormat("nl-NL", { day: "numeric", month: "short" }).format(date);
+}
 function renderTask(task) {
+  const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+  const completedSubtasks = subtasks.filter(subtask => subtask.completed).length;
+  const priority = task.priority || "normal";
   return `<article class="task-card${task.completed ? " completed" : ""}" draggable="true" data-task="${escapeHtml(task.id)}">
     <div class="task-topline"><input class="task-check" type="checkbox" aria-label="Taak afvinken: ${escapeHtml(task.title)}" ${task.completed ? "checked" : ""}>
-    <span class="task-title">${escapeHtml(task.title)}</span><button class="task-delete" aria-label="Taak verwijderen">×</button></div>
+    <span class="task-title">${escapeHtml(task.title)}</span><button class="task-edit" aria-label="Taak bewerken en subtaken beheren" title="Bewerken">✎</button><button class="task-delete" aria-label="Taak verwijderen">×</button></div>
     ${task.description ? `<p class="task-description">${escapeHtml(task.description)}</p>` : ""}
-    <div class="task-meta"><span class="task-tag tag-${escapeHtml(task.tone || "mint")}">${escapeHtml(task.tag || "Taak")}</span>${task.due ? `<span class="task-due${task.due === "Vandaag" ? " urgent" : ""}">${escapeHtml(task.due)}</span>` : ""}</div></article>`;
+    <div class="task-meta"><span class="task-tag tag-${escapeHtml(task.tone || "mint")}">${escapeHtml(task.tag || "Taak")}</span><span class="task-priority priority-${escapeHtml(priority)}">${priority === "high" ? "Hoog" : priority === "low" ? "Laag" : "Normaal"}</span>${task.due ? `<span class="task-due${isTaskOverdue(task) || task.due === "Vandaag" ? " urgent" : ""}">${escapeHtml(formatDueDate(task.due))}</span>` : ""}</div>
+    ${subtasks.length ? `<div class="task-subtasks"><div class="subtask-heading">Subtaken <span>${completedSubtasks}/${subtasks.length}</span></div>${subtasks.map((subtask, index) => `<label class="subtask-row"><input type="checkbox" data-subtask-index="${index}" ${subtask.completed ? "checked" : ""}><span class="${subtask.completed ? "subtask-completed" : ""}">${escapeHtml(subtask.title)}</span></label>`).join("")}</div>` : `<button class="add-subtask" data-edit-task>＋ Subtaak toevoegen</button>`}
+    </article>`;
 }
 function renderProgress() {
   const total = state.tasks.length;
@@ -283,9 +417,26 @@ function attachColumnEvents() {
     card.querySelector(".task-check").addEventListener("change", event => {
       const task = state.tasks.find(item => item.id === card.dataset.task);
       task.completed = event.target.checked;
+      if (task.completed && Array.isArray(task.subtasks)) task.subtasks.forEach(subtask => { subtask.completed = true; });
       saveState(); renderBoard();
       if (task.completed) launchConfetti();
     });
+    card.querySelector(".task-edit").addEventListener("click", () => {
+      const task = state.tasks.find(item => item.id === card.dataset.task);
+      openTaskModal(task.column, task);
+    });
+    card.querySelector("[data-edit-task]")?.addEventListener("click", () => {
+      const task = state.tasks.find(item => item.id === card.dataset.task);
+      openTaskModal(task.column, task);
+    });
+    card.querySelectorAll("[data-subtask-index]").forEach(checkbox => checkbox.addEventListener("change", event => {
+      const task = state.tasks.find(item => item.id === card.dataset.task);
+      const index = Number(event.currentTarget.dataset.subtaskIndex);
+      task.subtasks[index].completed = event.currentTarget.checked;
+      if (task.subtasks.length) task.completed = task.subtasks.every(subtask => subtask.completed);
+      saveState(); renderBoard();
+      if (task.completed) launchConfetti();
+    }));
     card.querySelector(".task-delete").addEventListener("click", () => {
       state.tasks = state.tasks.filter(item => item.id !== card.dataset.task);
       saveState(); renderBoard(); showToast("Taak verwijderd.");
@@ -318,7 +469,18 @@ function attachColumnEvents() {
 function openModal({ title, description = "", fields = [], submitLabel = "Opslaan", onSubmit }) {
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
-  backdrop.innerHTML = `<form class="modal"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p>${fields.map(field => `<label for="modal-${escapeHtml(field.id)}">${escapeHtml(field.label)}</label>${field.multiline ? `<textarea id="modal-${escapeHtml(field.id)}" name="${escapeHtml(field.id)}" placeholder="${escapeHtml(field.placeholder || "")}"></textarea>` : `<input id="modal-${escapeHtml(field.id)}" name="${escapeHtml(field.id)}" placeholder="${escapeHtml(field.placeholder || "")}" ${field.required ? "required" : ""} ${field.maxlength ? `maxlength="${field.maxlength}"` : ""}>`}`).join("")}<div class="modal-actions"><button type="button" data-cancel>Annuleren</button><button class="primary" type="submit">${escapeHtml(submitLabel)}</button></div></form>`;
+  backdrop.innerHTML = `<form class="modal"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p>${fields.map(field => {
+    const id = `modal-${escapeHtml(field.id)}`;
+    const name = escapeHtml(field.id);
+    const placeholder = escapeHtml(field.placeholder || "");
+    if (field.type === "select") {
+      return `<label for="${id}">${escapeHtml(field.label)}</label><select id="${id}" name="${name}">${field.options.map(option => `<option value="${escapeHtml(option.value)}" ${option.value === field.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select>`;
+    }
+    if (field.multiline) {
+      return `<label for="${id}">${escapeHtml(field.label)}</label><textarea id="${id}" name="${name}" placeholder="${placeholder}" ${field.maxlength ? `maxlength="${field.maxlength}"` : ""}>${escapeHtml(field.value || "")}</textarea>`;
+    }
+    return `<label for="${id}">${escapeHtml(field.label)}</label><input id="${id}" name="${name}" type="${escapeHtml(field.type || "text")}" value="${escapeHtml(field.value || "")}" placeholder="${placeholder}" ${field.required ? "required" : ""} ${field.maxlength ? `maxlength="${field.maxlength}"` : ""}>`;
+  }).join("")}<div class="modal-actions"><button type="button" data-cancel>Annuleren</button><button class="primary" type="submit">${escapeHtml(submitLabel)}</button></div></form>`;
   document.body.append(backdrop);
   backdrop.querySelector("[data-cancel]").addEventListener("click", () => backdrop.remove());
   backdrop.addEventListener("click", event => { if (event.target === backdrop) backdrop.remove(); });
@@ -330,14 +492,40 @@ function openModal({ title, description = "", fields = [], submitLabel = "Opslaa
   });
   backdrop.querySelector("input, textarea")?.focus();
 }
-function openTaskModal(columnId = state.columns[0]?.id) {
-  openModal({ title: "Een taakje erbij 🌱", description: "Kleine stapjes brengen je verder.", fields: [
-    { id: "title", label: "Wat gaan we doen?", placeholder: "Bijvoorbeeld: eerste schets maken", required: true, maxlength: 100 },
-    { id: "description", label: "Extra details (optioneel)", placeholder: "Een beetje context helpt...", multiline: true },
-    { id: "tag", label: "Label", placeholder: "Idee, Ontwerp, Team...", maxlength: 25 }
-  ], submitLabel: "Taak toevoegen", onSubmit: data => {
-    state.tasks.push({ id: `task-${Date.now()}`, column: columnId, title: data.title.trim(), description: data.description.trim(), tag: data.tag.trim() || "Taak", tone: "mint", due: "", completed: false });
-    saveState(); renderBoard(); showToast("Je taak is aan het bord geplakt! 🌱");
+function openTaskModal(columnId = state.columns[0]?.id, task = null) {
+  const subtasks = Array.isArray(task?.subtasks) ? task.subtasks : [];
+  openModal({ title: task ? "Taak bijwerken ✏️" : "Een taakje erbij 🌱", description: "Maak het concreet, dan wordt beginnen makkelijker.", fields: [
+    { id: "title", label: "Wat gaan we doen?", placeholder: "Bijvoorbeeld: eerste schets maken", value: task?.title || "", required: true, maxlength: 100 },
+    { id: "description", label: "Extra details (optioneel)", placeholder: "Een beetje context helpt...", value: task?.description || "", multiline: true },
+    { id: "tag", label: "Label", placeholder: "Idee, Ontwerp, Team...", value: task?.tag || "", maxlength: 25 },
+    { id: "due", label: "Deadline (optioneel)", type: "date", value: /^\d{4}-\d{2}-\d{2}$/.test(task?.due || "") ? task.due : "" },
+    { id: "priority", label: "Prioriteit", type: "select", value: task?.priority || "normal", options: [
+      { value: "low", label: "Laag" }, { value: "normal", label: "Normaal" }, { value: "high", label: "Hoog" }
+    ] },
+    { id: "subtasks", label: "Subtaken (één per regel)", placeholder: "Bijvoorbeeld:\nInspiratie verzamelen\nEerste versie maken", value: subtasks.map(subtask => subtask.title).join("\n"), multiline: true, maxlength: 1000 }
+  ], submitLabel: task ? "Wijzigingen opslaan" : "Taak toevoegen", onSubmit: data => {
+    const previousSubtasks = Array.isArray(task?.subtasks) ? task.subtasks : [];
+    const existingSubtasks = new Map();
+    previousSubtasks.forEach(subtask => {
+      const key = subtask.title.trim().toLocaleLowerCase();
+      existingSubtasks.set(key, [...(existingSubtasks.get(key) || []), subtask]);
+    });
+    const nextSubtasks = data.subtasks.split(/\r?\n/).map(title => title.trim()).filter(Boolean).map(title => {
+      const previous = existingSubtasks.get(title.toLocaleLowerCase())?.shift();
+      return { id: previous?.id || `subtask-${crypto.randomUUID()}`, title, completed: previous?.completed || false };
+    });
+    if (task) {
+      task.title = data.title.trim();
+      task.description = data.description.trim();
+      task.tag = data.tag.trim() || "Taak";
+      task.due = data.due || (/^\d{4}-\d{2}-\d{2}$/.test(task.due || "") ? "" : task.due);
+      task.priority = data.priority;
+      task.subtasks = nextSubtasks;
+      if (nextSubtasks.length) task.completed = nextSubtasks.every(subtask => subtask.completed);
+    } else {
+      state.tasks.push({ id: `task-${crypto.randomUUID()}`, column: columnId, title: data.title.trim(), description: data.description.trim(), tag: data.tag.trim() || "Taak", tone: "mint", due: data.due, priority: data.priority, completed: false, subtasks: nextSubtasks });
+    }
+    saveState(); renderBoard(); showToast(task ? "Je taak is bijgewerkt! ✨" : "Je taak is aan het bord geplakt! 🌱");
   } });
 }
 function renderNotes() {
@@ -477,6 +665,16 @@ function openBackendDialog() {
 }
 document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
 document.querySelector("#searchInput").addEventListener("input", renderBoard);
+document.querySelector("#filterSelect").addEventListener("change", renderBoard);
+document.querySelector("#themeToggle").addEventListener("click", () => {
+  const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(theme);
+  try { localStorage.setItem(THEME_KEY, theme); }
+  catch (error) {
+    console.error("Thema-instelling kon niet worden opgeslagen:", error);
+    showToast("Je thema is gewijzigd, maar kon niet worden opgeslagen.");
+  }
+});
 document.querySelector("#addTaskButton").addEventListener("click", () => openTaskModal());
 document.querySelector("#addNoteButton").addEventListener("click", () => {
   state.notes.unshift({ id: `note-${Date.now()}`, text: "" }); saveState(); renderNotes();
@@ -498,13 +696,17 @@ document.querySelector("#shareButton").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(shareUrl); showToast(activeRoomId ? "Uitnodigingslink gekopieerd!" : "Link naar het bord gekopieerd!"); }
   catch { showToast("Kopiëren lukte niet. Kopieer de link uit je adresbalk."); }
 });
-document.querySelector("#helpButton").addEventListener("click", () => showToast("Sleep taken tussen kolommen, vink ze af en vier je voortgang!"));
-document.querySelector("#filterButton").addEventListener("click", () => { document.querySelector("#searchInput").focus(); showToast("Typ om taken te filteren."); });
+document.querySelector("#helpButton").addEventListener("click", () => showToast("Sleep taken, voeg subtaken toe, stel deadlines in en filter op prioriteit!"));
 document.querySelector("#moreButton").addEventListener("click", () => showToast(activeRoomId ? "Je bord synchroniseert met iedereen in deze room." : "Je bord wordt automatisch bewaard op dit apparaat."));
 document.querySelector("#renameBoard").addEventListener("click", () => {
-  const heading = document.querySelector("h1");
-  const nextName = prompt("Hoe heet dit bord?", heading.textContent);
-  if (nextName?.trim()) { heading.textContent = nextName.trim().slice(0, 60); document.title = `${nextName.trim()} — Plak`; }
+  openModal({ title: "Bordnaam wijzigen", description: "Geef je bord een herkenbare naam.", fields: [
+    { id: "boardTitle", label: "Bordnaam", value: state.boardTitle, required: true, maxlength: 60 }
+  ], submitLabel: "Naam opslaan", onSubmit: data => {
+    state.boardTitle = data.boardTitle.trim();
+    renderBoardTitle();
+    saveState();
+    showToast("Bordnaam opgeslagen.");
+  } });
 });
 document.querySelector("#addMindNode").addEventListener("click", () => {
   const idea = prompt("Welk idee wil je toevoegen?");
@@ -517,6 +719,8 @@ document.querySelector("#addMindNode").addEventListener("click", () => {
 window.addEventListener("resize", drawMindmapLines);
 document.addEventListener("pointermove", publishCursor);
 document.querySelector("#todayLabel").textContent = new Intl.DateTimeFormat("nl-NL", { weekday: "long", day: "numeric", month: "long" }).format(new Date()).toLocaleUpperCase("nl-NL");
+applyTheme(loadTheme());
+renderBoardTitle();
 renderBoard();
 renderNotes();
 enableMindmapDragging();

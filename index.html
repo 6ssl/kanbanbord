@@ -25,7 +25,7 @@
           <button class="nav-item" data-view="notes"><span class="nav-icon">▤</span> Plaknotities</button>
         </nav>
         <div class="side-section-title boards-heading">JOUW BORDEN <button id="addBoard" title="Nieuw bord">+</button></div>
-        <button class="board-link selected"><span class="board-emoji">🌱</span> Project Spruit</button>
+        <button class="board-link selected"><span class="board-emoji">🌱</span><span data-board-title>Project Spruit</span></button>
         <button class="board-link"><span class="board-emoji">🎨</span> Ideeën & inspiratie</button>
         <div class="sidebar-bottom">
           <div class="upgrade-card"><span class="upgrade-spark">✦</span><strong>Grote ideeën?</strong><p>Maak samen ruimte voor nog meer.</p><button id="inviteButton">Nodig iemand uit <span>↗</span></button></div>
@@ -35,11 +35,12 @@
 
       <main class="main-area">
         <header class="topbar">
-          <div class="breadcrumb"><span>Mijn werkruimte</span><span class="crumb-slash">/</span><strong>Project Spruit</strong></div>
+          <div class="breadcrumb"><span>Mijn werkruimte</span><span class="crumb-slash">/</span><strong data-board-title>Project Spruit</strong></div>
           <div class="top-actions">
             <span class="saved-indicator"><i></i> Automatisch opgeslagen</span>
             <button class="room-button" id="roomButton"><span>♧</span> <span id="roomButtonText">Deel bord</span></button>
             <button class="icon-button" id="backendButton" aria-label="Multiplayer instellen" title="Multiplayer instellen">⚙</button>
+            <button class="icon-button theme-toggle" id="themeToggle" aria-label="Schakel naar donkere modus" title="Schakel naar donkere modus" aria-pressed="false">☾</button>
             <button class="icon-button" id="helpButton" aria-label="Help">?</button>
           </div>
         </header>
@@ -66,7 +67,13 @@
             </div>
             <div class="toolbar-actions">
               <label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="Zoek taken..." aria-label="Zoek taken"></label>
-              <button class="filter-button" id="filterButton">☷ <span>Filter</span></button>
+              <select class="filter-select" id="filterSelect" aria-label="Taken filteren">
+                <option value="all">Alle taken</option>
+                <option value="open">Nog te doen</option>
+                <option value="completed">Afgerond</option>
+                <option value="high">Hoge prioriteit</option>
+                <option value="overdue">Te laat</option>
+              </select>
               <button class="add-task-button" id="addTaskButton"><span>+</span> Nieuwe taak</button>
             </div>
           </div>

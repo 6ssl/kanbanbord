@@ -2,9 +2,13 @@
 
 Een statische Nederlandstalige kanban-app met een interactieve mindmap en plaknotities. Er zijn geen buildstappen nodig. Voor multiplayer wordt de Supabase-browserclient vanaf jsDelivr geladen.
 
+Taken kunnen subtaken, prioriteiten en deadlines bevatten. Bewerk een taak via het potloodje op de kaart; vink subtaken direct af en filter het bord op open, afgeronde of te late taken.
+
+De bordnaam is aanpasbaar en wordt lokaal of in de gedeelde room opgeslagen. Met de maan/zon-knop wissel je tussen licht en donker; je voorkeur blijft bewaard in deze browser.
+
 ## Lokaal bekijken
 
-Open `index.html` in een moderne browser. Zonder room worden taken, kolommen en notities lokaal in de browser opgeslagen (`localStorage`). Zodra je een Supabase-room joint, synchroniseren taken en notities tussen roomleden.
+Open `index.html` in een moderne browser. Zonder room worden taken, kolommen, notities en bordnaam lokaal in de browser opgeslagen (`localStorage`). De thema-voorkeur wordt ook lokaal bewaard. Zodra je een Supabase-room joint, synchroniseren bordgegevens tussen roomleden.
 
 ## Publiceren met GitHub Pages
 
