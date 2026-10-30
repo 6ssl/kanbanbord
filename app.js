@@ -366,6 +366,12 @@ function renderBoard() {
         || (filter === "high" && task.priority === "high")
         || (filter === "overdue" && isTaskOverdue(task));
       return task.column === column.id && matchesQuery && matchesFilter;
+    }).sort((first, second) => {
+      const firstNumber = first.title.match(/\d+/)?.[0];
+      const secondNumber = second.title.match(/\d+/)?.[0];
+      if (firstNumber === undefined) return secondNumber === undefined ? 0 : 1;
+      if (secondNumber === undefined) return -1;
+      return Number(firstNumber) - Number(secondNumber);
     });
     return `<section class="kanban-column" data-column="${escapeHtml(column.id)}">
       <div class="column-header"><i class="column-dot" style="background:${escapeHtml(column.color)}"></i>

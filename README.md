@@ -6,6 +6,8 @@ Taken kunnen subtaken, prioriteiten en deadlines bevatten. Bewerk een taak via h
 
 Claim een open taak om te laten zien dat je eraan werkt. Andere bordleden zien wie de taak heeft geclaimd; je kunt je eigen claim ook weer vrijgeven. Claims synchroniseren mee in een gedeelde room.
 
+Taken met nummers in de titel worden per kolom numeriek gesorteerd.
+
 De bordnaam is aanpasbaar en wordt lokaal of in de gedeelde room opgeslagen. Met de maan/zon-knop wissel je tussen licht en donker; je voorkeur blijft bewaard in deze browser.
 
 ## Lokaal bekijken
